@@ -80,10 +80,10 @@ workflow {
     // `merge` will interleave; you can also use `concat` if ordering matters
     all_seqs = contig_seqs.merge(genome_seqs)
 
-    // Merge manifest files using named outputs
+    // Pass the directory where manifests are stored rather than collecting files
     make_manifest(
         download_sequences.out.manifest_file,
-        download_genome.out.manifest_files.collect()
+        "${params.out}/sequences"  // Directory where genome manifests are published
     )
 
     all_seqs | sketch
@@ -317,31 +317,67 @@ process make_manifest {
 
     input:
     path contigs_meta
-    path genome_files
+    val genome_manifests_dir
 
     output:
     path "manifest.csv"
 
     script:
     """
-    Rscript - << 'EOF'
-    library(data.table)
+    # Create the R script
+    cat > combine_manifests.R << EOF
+library(data.table)
 
-    # Load the contigs manifest
-    contigs <- fread("${contigs_meta}")
+# Load the contigs manifest
+contigs <- fread("${contigs_meta}")
 
-    # Load all genome manifests
-    genome_files <- list.files('.', 'manifest_genome_.*\\.csv', full.names=TRUE)
-    if (length(genome_files) > 0) {
-        genomes <- rbindlist(lapply(genome_files, fread))
+# Define the genomic manifests directory to search
+manifests_dir <- "${genome_manifests_dir}"
+
+# Load all genome manifests from the specified directory
+genome_files <- list.files(manifests_dir, pattern='^manifest_genome_.*\\.csv\$', full.names=TRUE)
+
+# Print information for debugging
+cat("Contigs manifest path: ${contigs_meta}\\n")
+cat("Looking for genome manifests in:", manifests_dir, "\\n")
+cat("Found", length(genome_files), "genome manifest files\\n")
+
+# Load and combine all manifests
+if (length(genome_files) > 0) {
+    # Read all manifests and combine them
+    genomes_list <- lapply(genome_files, function(f) {
+        tryCatch({
+            dt <- fread(f)
+            return(dt)
+        }, error = function(e) {
+            cat("Error reading file:", f, "\\n")
+            cat("Error message:", e\$message, "\\n")
+            return(NULL)
+        })
+    })
+    
+    # Filter out NULL entries (failed reads)
+    genomes_list <- genomes_list[!sapply(genomes_list, is.null)]
+    
+    if (length(genomes_list) > 0) {
+        genomes <- rbindlist(genomes_list, fill=TRUE)
     } else {
         genomes <- data.table()
     }
+} else {
+    genomes <- data.table()
+}
 
-    # Combine and write
-    full <- rbind(contigs, genomes, fill=TRUE)
-    fwrite(full, 'manifest.csv')
+# Combine contigs and genomes
+full <- rbind(contigs, genomes, fill=TRUE)
+
+# Write the combined manifest
+fwrite(full, 'manifest.csv')
+cat("Combined manifest written successfully\\n")
 EOF
+
+    # Execute the R script
+    Rscript combine_manifests.R
     """
 }
 
