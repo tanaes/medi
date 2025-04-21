@@ -27,3 +27,4 @@ dependencies:
   - architeuthis>=0.4.0
   - pigz
   - gxx
+  - seqkit

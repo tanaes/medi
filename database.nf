@@ -255,13 +255,20 @@ process download_sequences {
     path(matches)
 
     output:
-    tuple path("sequences/*.fna.gz"), path("manifest.csv")
+    tuple path("sequences/*.fna.gz"), path("sequences/manifest_contigs.csv")
 
     script:
     """
     download.R --matches $matches \\
       --threads $task.cpus \\
       --out_dir sequences
+    
+    # Make sure the output file exists, even if empty
+    if [ ! -f "sequences/manifest_contigs.csv" ]; then
+        echo "Creating empty manifest_contigs.csv file"
+        mkdir -p sequences
+        echo "id,db,filename,num_records,seqlength" > sequences/manifest_contigs.csv
+    fi
     """
 }
 
@@ -313,7 +320,7 @@ process make_manifest {
     Rscript - << 'EOF'
     library(data.table)
 
-    # Load the one contigs manifest
+    # Load the contigs manifest
     contigs <- fread("${contigs_meta}")
 
     # Load all genome manifests
