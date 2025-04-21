@@ -76,18 +76,23 @@ workflow {
 
     //
     // 5) Merge contigs + genomes and proceed
-    //
-    // `merge` will interleave; you can also use `concat` if ordering matters
-    all_seqs = contig_seqs.merge(genome_seqs)
+    all_seqs = contig_seqs.mix(genome_seqs.flatten())
 
+    // Add a unique identifier to each input file for sketching
+    all_seqs_tagged = all_seqs.map { file -> 
+        def basename = file.baseName
+        return [basename, file]
+    }
+    
     // Pass the directory where manifests are stored rather than collecting files
     make_manifest(
         download_sequences.out.manifest_file,
         "${params.out}/sequences"  // Directory where genome manifests are published
     )
 
-    all_seqs | sketch
+    sketch(all_seqs_tagged)
 
+    // Collect sketch outputs with unique names for ANI
     ani(sketch.out.collect())
 
     food_mappings(match_taxids.out)
@@ -351,14 +356,14 @@ process sketch {
     publishDir "${params.out}/sketches", mode: 'copy'
 
     input:
-    path(seq)
+    tuple val(id), path(seq)
 
     output:
-    path("*.sig")
+    path "${id}.sig"
 
     script:
     """
-    sourmash sketch dna -p k=21,k=31,k=51,scaled=1000 ${seq}
+    sourmash sketch dna -p k=21,k=31,k=51,scaled=1000 ${seq} -o ${id}.sig
     """
 }
 
