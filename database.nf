@@ -71,14 +71,14 @@ workflow {
 
     download_genome(genbank_ch)
 
-    // Use named output
-    genome_seqs = download_genome.out.fasta_files
+    // Use named output for genomes
+    genome_seqs = download_genome.out.fasta_files.collect()
 
     //
     // 5) Merge contigs + genomes and proceed
     //
-    // `merge` will interleave; you can also use `concat` if ordering matters
-    all_seqs = contig_seqs.merge(genome_seqs)
+    // Important change here - collect all genomes properly before flattening
+    all_seqs = contig_seqs.mix(genome_seqs.flatten())
 
     // Pass the directory where manifests are stored rather than collecting files
     make_manifest(
