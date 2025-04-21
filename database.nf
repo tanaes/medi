@@ -193,7 +193,7 @@ process download_sequences {
 
 process download_genome {
     tag "$id"
-    cpus params.threads
+    cpus 1
     memory "4 GB"
     publishDir "${params.out}/sequences", mode: 'copy'
     errorStrategy { task.attempt <= 2 ? 'retry' : 'ignore' }
