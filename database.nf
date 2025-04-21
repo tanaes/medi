@@ -45,8 +45,8 @@ workflow {
     match_taxids.out | 
         download_sequences
 
-    // Flatten the tuple of paths into a simple seq channel
-    contig_seqs = download_sequences.out.map{ it[0] }.flatten()
+    // Use named output
+    contig_seqs = download_sequences.out.fasta_files.flatten()
 
     //
     // 3) Read matches.csv that was CREATED by match_taxids into a channel for genomes
@@ -71,8 +71,8 @@ workflow {
 
     download_genome(genbank_ch)
 
-    // Collect genome fna.gz files
-    genome_seqs = download_genome.out
+    // Use named output
+    genome_seqs = download_genome.out.fasta_files
 
     //
     // 5) Merge contigs + genomes and proceed
@@ -80,14 +80,12 @@ workflow {
     // `merge` will interleave; you can also use `concat` if ordering matters
     all_seqs = contig_seqs.merge(genome_seqs)
 
-    // Merge manifest files  
-    // Collect only genome manifest files for make_manifest 
-    // Update the make_manifest call to use both manifest file collections
+    // Merge manifest files using named outputs
     make_manifest(
-        download_sequences.out.map{ it[1] },
-        download_genome.out.map{ it[1] }.collect()
+        download_sequences.out.manifest_file,
+        download_genome.out.manifest_files.collect()
     )
-    
+
     all_seqs | sketch
 
     ani(sketch.out.collect())
@@ -257,7 +255,8 @@ process download_sequences {
     path(matches)
 
     output:
-    tuple path("sequences/*.fna.gz"), path("sequences/manifest_contigs.csv")
+    path "sequences/*.fna.gz", emit: fasta_files
+    path "sequences/manifest_contigs.csv", emit: manifest_file
 
     script:
     """
@@ -286,8 +285,8 @@ process download_genome {
     tuple val(id), val(url), val(taxid)
     
     output:
-    path "${id}.fna.gz", optional: true
-    path "manifest_genome_${id}.csv", optional: true
+    path "${id}.fna.gz", emit: fasta_files, optional: true
+    path "manifest_genome_${id}.csv", emit: manifest_files, optional: true
     
     script:
     """
