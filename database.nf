@@ -81,11 +81,13 @@ workflow {
     all_seqs = contig_seqs.merge(genome_seqs)
 
     // Merge manifest files  
+    // Collect only genome manifest files for make_manifest 
+    // Update the make_manifest call to use both manifest file collections
     make_manifest(
         download_sequences.out.map{ it[1] },
-        download_genome.out.collect()
+        download_genome.out.map{ it[1] }.collect()
     )
-
+    
     all_seqs | sketch
 
     ani(sketch.out.collect())
@@ -285,6 +287,7 @@ process download_genome {
     
     output:
     path "${id}.fna.gz", optional: true
+    path "manifest_genome_${id}.csv", optional: true
     
     script:
     """
@@ -298,6 +301,11 @@ process download_genome {
     
     if [ -f "${id}.fna.gz" ]; then
         echo "Successfully downloaded ${id}"
+        # Ensure manifest was created
+        if [ ! -f "manifest_genome_${id}.csv" ]; then
+            echo "Error: Manifest file not created for ${id}" >&2
+            exit 1
+        fi
     else
         echo "Warning: Failed to download ${id}" >&2
         exit 1
