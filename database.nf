@@ -71,8 +71,8 @@ workflow {
 
     download_genome(genbank_ch)
 
-    // Use named output
-    genome_seqs = download_genome.out.fasta_files
+    // Use named output for genomes
+    genome_seqs = download_genome.out.fasta_files.collect()
 
     //
     // 5) Merge contigs + genomes and proceed
