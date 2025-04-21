@@ -2,21 +2,40 @@
 
 nextflow.enable.dsl = 2
 
+// Default parameters with remote URLs
 params.threads = 20
 params.out = "${launchDir}/data"
+params.foodb = null       // Default is null, will use remote URL if not specified
+params.genbank_summary = null
+params.taxdump = null
+
+// Remote URLs (used as fallbacks)
+def foodb_remote = "https://foodb.ca/public/system/downloads/foodb_2020_4_7_csv.tar.gz"
+def genbank_summary_remote = "https://ftp.ncbi.nlm.nih.gov/genomes/ASSEMBLY_REPORTS/assembly_summary_genbank.txt"
+def taxdump_remote = "ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz"
 
 workflow {
-    // Define data sources
-    def foodb = "https://foodb.ca/public/system/downloads/foodb_2020_4_7_csv.tar.gz"
-    def genbank_summary = "https://ftp.ncbi.nlm.nih.gov/genomes/ASSEMBLY_REPORTS/assembly_summary_genbank.txt"
-    def taxdump = "ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz"
+    // Check if provided files exist
+    def foodb_exists = params.foodb && file(params.foodb).exists()
+    def genbank_summary_exists = params.genbank_summary && file(params.genbank_summary).exists()
+    def taxdump_exists = params.taxdump && file(params.taxdump).exists()
+    
+    // Determine sources (local if exists, otherwise remote)
+    def foodb_src = foodb_exists ? params.foodb : foodb_remote
+    def genbank_summary_src = genbank_summary_exists ? params.genbank_summary : genbank_summary_remote
+    def taxdump_src = taxdump_exists ? params.taxdump : taxdump_remote
+    
+    // Log the sources being used
+    log.info "FooDB source: ${foodb_src}" + (foodb_exists ? " (local file)" : " (remote URL)")
+    log.info "GenBank summary source: ${genbank_summary_src}" + (genbank_summary_exists ? " (local file)" : " (remote URL)")
+    log.info "Taxdump source: ${taxdump_src}" + (taxdump_exists ? " (local file)" : " (remote URL)")
 
     //
     // 1) Core DB downloads & matching
     //
-    download(foodb, genbank_summary) | 
+    download(foodb_src, genbank_summary_src) | 
         get_taxids
-    download_taxa_dbs(taxdump)
+    download_taxa_dbs(taxdump_src)
     get_lineage(get_taxids.out.combine(download_taxa_dbs.out)) | 
         match_taxids
 
@@ -80,18 +99,49 @@ process download {
     publishDir "${params.out}/dbs", mode: 'copy'
 
     input:
-    val foodb
-    val genbank_summary
+    val foodb_src
+    val genbank_summary_src
 
     output:
     tuple path("foodb"), path("genbank_summary.tsv")
 
     script:
+    // Use absolute paths for local files
+    def foodb_path = foodb_src.startsWith('/') ? foodb_src : 
+        (foodb_src.startsWith('http') || foodb_src.startsWith('ftp')) ? foodb_src : "${launchDir}/${foodb_src}"
+    def genbank_path = genbank_summary_src.startsWith('/') ? genbank_summary_src : 
+        (genbank_summary_src.startsWith('http') || genbank_summary_src.startsWith('ftp')) ? genbank_summary_src : "${launchDir}/${genbank_summary_src}"
+    
     """
-    wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 -t 4 ${foodb} -O foodb.tgz && \\
-    wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 -t 4 ${genbank_summary} -O genbank_summary.tsv && \\
-    tar -xf foodb.tgz && \\
-    mv foodb_*_csv foodb
+    # Handle FooDB (local or remote)
+    if [[ "${foodb_src}" == http* || "${foodb_src}" == ftp* ]]; then
+        echo "Downloading FooDB from: ${foodb_src}"
+        wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 -t 4 ${foodb_src} -O foodb.tgz && \\
+        tar -xf foodb.tgz && \\
+        mv foodb_*_csv foodb
+    else
+        echo "Using local FooDB file: ${foodb_path}"
+        if [[ "${foodb_path}" == *.tar.gz ]]; then
+            # It's a tar.gz file
+            tar -xf "${foodb_path}"
+            mv foodb_*_csv foodb
+        elif [[ -d "${foodb_path}" ]]; then
+            # It's a directory
+            cp -r "${foodb_path}" foodb
+        else
+            echo "Unsupported FooDB format: ${foodb_path}" >&2
+            exit 1
+        fi
+    fi
+    
+    # Handle GenBank summary (local or remote)
+    if [[ "${genbank_summary_src}" == http* || "${genbank_summary_src}" == ftp* ]]; then
+        echo "Downloading GenBank summary from: ${genbank_summary_src}"
+        wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 -t 4 ${genbank_summary_src} -O genbank_summary.tsv
+    else
+        echo "Using local GenBank summary: ${genbank_path}"
+        cp "${genbank_path}" genbank_summary.tsv
+    fi
     """
 }
 
@@ -126,16 +176,40 @@ process download_taxa_dbs {
     cpus 1
 
     input:
-    val(taxdump)
+    val(taxdump_src)
 
     output:
     path("taxdump")
 
     script:
+    // Use absolute path for file checks
+    def taxdump_path = taxdump_src.startsWith('/') ? taxdump_src : "${launchDir}/${taxdump_src}"
+    
     """
-    wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 -t 4 \\
-        ${taxdump} && \\
-        mkdir taxdump && tar -xf taxdump.tar.gz --directory taxdump
+    # Handle taxdump (local or remote)
+    mkdir -p taxdump
+    
+    # Check if source is a URL or local file
+    if [[ "${taxdump_src}" == http* || "${taxdump_src}" == ftp* ]]; then
+        # It's a URL
+        echo "Downloading taxdump from: ${taxdump_src}"
+        wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 -t 4 \\
+            ${taxdump_src} -O taxdump.tar.gz && \\
+            tar -xf taxdump.tar.gz --directory taxdump
+    else
+        # It's a local file - use absolute path
+        echo "Using local taxdump: ${taxdump_path}"
+        if [[ "${taxdump_path}" == *.tar.gz ]]; then
+            # It's a tar.gz file
+            tar -xf "${taxdump_path}" --directory taxdump
+        elif [[ -d "${taxdump_path}" ]]; then
+            # It's a directory
+            cp -r "${taxdump_path}"/* taxdump/
+        else
+            echo "Unsupported taxdump format: ${taxdump_path}" >&2
+            exit 1
+        fi
+    fi
     """
 }
 
